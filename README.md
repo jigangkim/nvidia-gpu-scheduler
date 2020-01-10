@@ -10,8 +10,6 @@ Installation (virtual python environment such as venv/conda is recommended)
     pip install -e . # editable (develop mode) installation
     
 Usage (example)
+    
     cd /path/to/install/nvidia-gpu-scheduler
-
     python example.py # -h or --help to view arguments
-
-Adapt to your needs
