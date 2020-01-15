@@ -1,4 +1,12 @@
-Run multiple NVIDIA GPU compute tasks
+# Manage multiple NVIDIA GPU compute tasks
+
+Supports per gpu compute process/utilization rate limits on a per-(UNIX)user basis, load-balancing and more.
+
+Tested on tensorflow-gpu tasks.
+
+<p align="center">
+  <img src="screenshot.png"><br>
+</p>
 
 Installation (virtual python environment such as venv/conda is recommended)
     
