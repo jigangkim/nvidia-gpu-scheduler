@@ -1,0 +1,9 @@
+{
+    "sys.argv": [
+        "--alg", "trpo_mpi",
+        "--env", "Walker2d-v2",
+        "--num_timesteps", "1e6",
+        "--log_path", "/tmp/baselines/results/logs/trpo-walker2d-seed0",
+        "--seed", "0"
+    ]
+}

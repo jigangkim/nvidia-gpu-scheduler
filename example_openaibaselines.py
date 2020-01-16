@@ -1,60 +1,45 @@
 import argparse
 from pathlib import Path
 from nvidia_gpu_scheduler.scheduler import NVGPUScheduler
+try: from baselines.run import main as run_baseline
+except ImportError as e: print('This example requires OpenAI baselines (https://github.com/openai/baselines)')
+try: import mujoco_py
+except ImportError as e: print('This example requires mujoco-py (https://github.com/openai/mujoco-py)')
 
 
-def child_process(args):
-    import numpy as np
-    import os
-    import time
-    from tqdm import tqdm
+def child_process(packaged_args):
+    from baselines.common.cmd_util import common_arg_parser
     from nvidia_gpu_scheduler.utils import log_tqdm
+    import os
+    from tqdm import tqdm
 
-    n = 10
-    pbar = tqdm(total=n)
-    config_filename = os.path.basename(args.config_dir)
+    args, config_dir = packaged_args # unpack
+    # Display addtional info (real-time child process progress not working)
+    arg_parser = common_arg_parser()
+    parsed_args, parsed_unknown_args = arg_parser.parse_known_args(args)
+    pbar = tqdm(total=parsed_args.num_timesteps)
+    config_filename = os.path.basename(config_dir)
     log_tqdm(pbar, config_filename)
-    for i in range(n):
-        time.sleep(1)
-        pbar.update(n=1)
-        log_tqdm(pbar, config_filename)
+    # Execute OpenAI baselines.run module
+    run_baseline(args)
+    # Close tqdm and remove tqdm logs
     log_tqdm(pbar, config_filename, remove=True)
     pbar.close()
-    # intentionally trigger with 50% probability
-    if np.random.randint(0, 2, dtype='bool'):
-        raise ValueError('failed with 50% probability')
-    else:
-        print('succeeded with 50% probability')
 
 
-def child_process_args(f, logging=False, **kwargs):
+def child_process_args(f, **kwargs):
     import json
-    from types import SimpleNamespace
 
-    # reconstruct arguments
-    params = json.load(f, object_hook=lambda d : SimpleNamespace(**d)) # read json as namespace
-    args = SimpleNamespace()
-    if hasattr(params, 'ddpg'):
-        args.config_type = 'ddpg'
-    elif hasattr(params, 'lnt'):
-        args.config_type = 'lnt-ddpg'
-    else:
-        raise ValueError('Cannot find CONFIG_TYPE!')
-    args.config_dir = f.name
-    args.absolute_path = True
-    args.logging = logging
-    args.render = False
-    args.resume = False
-    args.playback = False
-    return args
+    params = json.load(f)
+    return params['sys.argv'], f.name
 
 
 if __name__ == '__main__':
     '''
-    Dummy example
+    OpenAI baselines example
     
-    User should provide child process function and child process argument function.
-    Incorporating nvidia_gpu_scheduler.utils.log_tqdm into the chlid process function is recommended to track child process progress.
+    OpenAI baselines (https://github.com/openai/baselines) and its dependencies (mujoco-py, ...) are required to run this example!
+    Tracking child process progress was NOT implemented for this example. (requires modifying the OpenAI baselines source code or some hacky workaround)
 
     '''
     parser = argparse.ArgumentParser(description='Simple example for NVIDIA GPU compute task scheduling utility (quad-GPU setup)')
@@ -73,7 +58,7 @@ if __name__ == '__main__':
     parser.add_argument('--utilization_margin', type=int, default=5,
         help='Percent margin for maximum GPU utilization rate'
     )
-    parser.add_argument('--time_between_tasks', type=int, default=3,
+    parser.add_argument('--time_between_tasks', type=int, default=15,
         help='Time delay in seconds between tasks'
     )
     parser.add_argument('--child_verbose', action='store_true',
@@ -84,6 +69,6 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
     
-    path_to_configs = str((Path(__file__).parent / 'example_configs').resolve())
+    path_to_configs = str((Path(__file__).parent / 'example_openaibaselines_configs').resolve())
     manager = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
     manager.run()

@@ -1,0 +1,9 @@
+{
+    "sys.argv": [
+        "--alg", "ppo2",
+        "--env", "HalfCheetah-v2",
+        "--num_timesteps", "1e6",
+        "--log_path", "/tmp/baselines/results/logs/ppo-halfcheetah-seed0",
+        "--seed", "0"
+    ]
+}

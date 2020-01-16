@@ -1,0 +1,9 @@
+{
+    "sys.argv": [
+        "--alg", "ddpg",
+        "--env", "HalfCheetah-v2",
+        "--num_timesteps", "1e6",
+        "--log_path", "/tmp/baselines/results/logs/ddpg-halfcheetah-seed0",
+        "--seed", "0"
+    ]
+}
