@@ -18,6 +18,7 @@ import py3nvml
 import signal
 import time
 from tqdm import tqdm
+import traceback
 from types import SimpleNamespace
 
 from .utils import get_num_procs, get_gpu_utilization, get_gpumem_utilization
@@ -229,6 +230,24 @@ class NVGPUScheduler(object):
                 break
 
         print('summary - done: %d, failed: %d, halted: %d, queued: %d' % (len(done), len(failed), len(running), len(queued)))
+
+
+# https://stackoverflow.com/questions/6728236/exception-thrown-in-multiprocessing-pool-not-detected
+class CatchExceptions(object):
+    '''
+    Wrapper for callable enabling child process exception/traceback catching
+    '''
+    def __init__(self, callable):
+        self.__callable = callable
+
+
+    def __call__(self, *args, **kwargs):
+        try:
+            result = self.__callable(*args, **kwargs)
+        except Exception as e:
+            print(traceback.format_exc())
+            raise
+        return result
 
 
 # def child_process(args):

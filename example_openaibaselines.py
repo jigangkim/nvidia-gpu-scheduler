@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from nvidia_gpu_scheduler.scheduler import NVGPUScheduler
+from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, CatchExceptions
 try: from baselines.run import main as run_baseline
 except ImportError as e: print('This example requires OpenAI baselines (https://github.com/openai/baselines)')
 try: import mujoco_py
@@ -72,3 +72,4 @@ if __name__ == '__main__':
     path_to_configs = str((Path(__file__).parent / 'example_openaibaselines_configs').resolve())
     manager = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
     manager.run()
+    # use CatchExceptions(child_process) to display child process traceback upon uncaught exception

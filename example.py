@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-from nvidia_gpu_scheduler.scheduler import NVGPUScheduler
+from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, CatchExceptions
 
 
 def child_process(args):
@@ -76,7 +76,7 @@ if __name__ == '__main__':
     parser.add_argument('--time_between_tasks', type=int, default=3,
         help='Time delay in seconds between tasks'
     )
-    parser.add_argument('--child_verbose', action='store_true',
+    parser.add_argument('--child_verbose', action='store_false',
         help='Allow child process(s) to output to terminal'
     )
     parser.add_argument('--logging', action='store_true',
@@ -85,5 +85,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     path_to_configs = str((Path(__file__).parent / 'example_configs').resolve())
-    manager = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
-    manager.run()
+    # 1. child process does NOT display traceback upon uncaught exception by default
+    manager1 = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
+    manager1.run()
+    # 2. use CatchExceptions wrapper to display child process traceback upon uncaught exception
+    manager2 = NVGPUScheduler(CatchExceptions(child_process), path_to_configs, child_args=child_process_args, **vars(args))
+    manager2.run()
