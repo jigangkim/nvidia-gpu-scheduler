@@ -17,7 +17,12 @@ Installation (virtual python environment such as venv/conda is recommended)
     pip install . # standard installation
     pip install -e . # editable (develop mode) installation
     
-Usage (example)
+Usage (dummy example)
     
     cd /path/to/install/nvidia-gpu-scheduler
     python example.py # -h or --help to view arguments
+
+Usage (OpenAI baselines example)
+    
+    cd /path/to/install/nvidia-gpu-scheduler
+    python example_openaibaselines.py # -h or --help to view arguments
