@@ -26,7 +26,7 @@ from types import SimpleNamespace
 import urllib.request
 
 from utils import get_num_procs, get_gpu_utilization, get_gpumem_utilization
-from utils import prompt_yes_or_no, mute_terminal as mute, log_tqdm, ROSRate
+from utils import prompt_yes_or_no, mute_terminal as mute, log_tqdm, ROSRate, get_random_string
 
 
 class NVGPUScheduler(SyncManager):
@@ -36,6 +36,10 @@ class NVGPUScheduler(SyncManager):
     worker_status_q = queue.Queue() # worker(s) -> scheduler
 
     def __init__(self, port, authkey, ip_type='local'):
+
+        NVGPUScheduler.counter += 1
+        if NVGPUScheduler.counter > 1:
+            raise Exception('More than one instance of NVGPUScheduler already exist! (existing instances: %d)'%(NVGPUScheduler.counter))
 
         # prevent SIGINT signal from affecting the manager
         signal.signal(signal.SIGINT, self._signal_handling)
@@ -52,14 +56,9 @@ class NVGPUScheduler(SyncManager):
             self.ip = '127.0.0.1'
         else:
             raise ValueError('Invalid ip_type')
-        
         self.port = port
-
         super(NVGPUScheduler, self).__init__(address=(self.ip, self.port), authkey=str.encode(authkey))
         print('Configured NVGPUScheduler')
-        NVGPUScheduler.counter += 1
-        if NVGPUScheduler.counter > 1:
-            raise Exception('More than one instance of NVGPUScheduler already exist! (existing instances: %d)'%(NVGPUScheduler.counter))
 
         self.rate = ROSRate(1)
 
@@ -200,7 +199,7 @@ class NVGPUScheduler(SyncManager):
 
     def _signal_handling(self, signum, frame):
         self.scheduler_terminate = True
-        print('pausing... Please wait!')
+        print('pausing scheduler... Please wait!')
 
     def __del__(self):
         NVGPUScheduler.counter -= 1
@@ -211,7 +210,7 @@ NVGPUScheduler.register('get_worker_status_q', callable=lambda: NVGPUScheduler.w
 
 class NVGPUWorker(SyncManager):
 
-    def __init__(self, ip, port, authkey):
+    def __init__(self, ip, port, authkey, name=None):
 
         # prevent SIGINT signal from affecting the manager
         signal.signal(signal.SIGINT, self._signal_handling)
@@ -219,29 +218,200 @@ class NVGPUWorker(SyncManager):
 
         self.ip = ip
         self.port = port
-        super(NVGPUWorker, self).__init__(address=(ip, port), authkey=str.encode(authkey))
+        self.name = 'worker_%s'%(get_random_string(10)) if name is None else name
+        super(NVGPUWorker, self).__init__(address=(self.ip, self.port), authkey=str.encode(authkey))
         print('Configured NVGPUWorker')
+
+        self.set_limits()
+        print('Resource limits set to default profile:')
+        self.view_limits()
+
+        self.rate = ROSRate(1)
 
     def connect(self, *args, **kwargs):
         super(NVGPUWorker, self).connect(*args, **kwargs)
         print('NVGPUWorker connected to %s:%s'%(self.ip,self.port))
+
+    def set_limits(
+        self,
+        available_gpus=[],
+        gpu_utilization_limit=[],
+        gpu_job_limit=[],
+        utilization_margin=0,
+        time_between_jobs=0,
+        child_verbose=False,
+        apply_limits=['user', 'worker'][0]
+        ):
+        self.limits = SimpleNamespace()
+        self.limits.available_gpus = available_gpus
+        self.limits.gpu_utilization_limit = gpu_utilization_limit
+        self.limits.gpu_job_limit = gpu_job_limit
+        self.limits.utilization_margin = utilization_margin
+        self.limits.time_between_jobs = time_between_jobs
+        self.limits.child_verbose = child_verbose
+        self.limits.apply_limits = apply_limits
     
+    def view_limits(self):
+        print('self.limits = %s'%(self.limits))
+
     def run(self):
-        pending_job_q = self.get_pending_job_q()
-        status_q = self.get_worker_status_q()
-        
-        raise NotImplementedError()
-        # NVGPUWorker.mp_factorizer(pending_job_q, status_q)
+
+        # Access shared queues
+        shared_pending_job_q = self.get_pending_job_q()
+        shared_worker_status_q = self.get_worker_status_q()
+
+        # Worker state
+        self.worker_resume = True
+        self.worker_terminate = False
+        procs = {}
+        running = OrderedDict()
+        done = OrderedDict()
+        failed = OrderedDict()
+        last_job_time = -float('inf')
+
+        alpha = np.exp(-3/self.limits.time_between_jobs)
+        total_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
+        user_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
+        worker_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
+        while shared_pending_job_q.qsize() + len(running):
+            curr_user = getpass.getuser()
+            list_of_gpus = self.limits.available_gpus
+            max_utilization = self.limits.gpu_utilization_limit
+            max_jobs_per_gpu = self.limits.gpu_job_limit
+
+            # 1. update candidate GPU
+            total_compute_procs, user_compute_procs, pid_compute_procs = \
+                get_num_procs(allocated_gpus=list_of_gpus, username=curr_user, version='v2')
+            total_gpu_utilization = get_gpu_utilization(allocated_gpus=list_of_gpus)
+            user_gpu_utilization = [ceil(x/(y+1e-12)*z) for x, y, z in zip(user_compute_procs, total_compute_procs, total_gpu_utilization)]
+            total_gpumem_utilization, user_gpumem_utilization, pid_gpumem_utilization = \
+                get_gpumem_utilization(allocated_gpus=list_of_gpus, username=curr_user, version='v2')
+            
+            total_gpu_utilization_filt = [(1 - alpha)*x + alpha*X for x, X in zip(total_gpu_utilization, total_gpu_utilization_filt)]
+            user_gpu_utilization_filt = [(1 - alpha)*x + alpha*X for x, X in zip(user_gpu_utilization, user_gpu_utilization_filt)]
+
+            cand_gpu, cand_gpu_util, cand_gpumem_util = [], [], []
+            for i, gpuid, in enumerate(list_of_gpus):
+                tot_util_cond = total_gpu_utilization_filt[i] <= (100-self.utilization_margin)
+                tot_memutil_cond = total_gpumem_utilization[i] <= 50 # (1 - gpu_fraction)*100
+                user_util_cond = user_gpu_utilization_filt[i] < floor(max_utilization[i]*(100-self.utilization_margin)/100)
+                user_numproc_cond = user_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
+                if tot_util_cond and user_util_cond and user_numproc_cond and tot_memutil_cond:
+                    cand_gpu.append(gpuid)
+                    cand_gpu_util.append(total_gpu_utilization_filt[i])
+                    cand_gpumem_util.append(total_gpumem_utilization[i])
+
+            # 2. run job process
+            raise NotImplementedError()
+            if shared_pending_job_q.qsize() == 0 or len(cand_gpu) == 0 or time.time() - last_job_time < self.limits.time_between_jobs: # no available GPUs or no queued tasks
+                pass
+            else:
+                min_util_idx = cand_gpu_util.index(min(cand_gpu_util))
+                if py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=0.5, max_procs=-1) == 0:
+                    # if for some reason cannot allocate gpu
+                    # print('CUDA_VISIBLE_DEVICES = %s'%(os.environ.get('CUDA_VISIBLE_DEVICES')))
+                    last_job_time = time.time()
+                    continue
+                signal.signal(signal.SIGINT, signal.SIG_IGN)
+                if self.child_verbose:
+                    p = multiprocessing.Pool(processes=1)
+                else:
+                    p = multiprocessing.Pool(processes=1, initializer=mute)
+                pools[queued[0]] = p
+                with open(queued[0], 'r') as f:
+                    # running[queued[0]] = p.map_async(self.child_process, self._get_child_process_args(f))
+                    running[queued[0]] = p.apply_async(self.child_process, self._get_child_process_args(f))
+                signal.signal(signal.SIGINT, self.default_handler)
+                queued.pop(0)
+                last_job_time = time.time()
+            # update thread status
+            ready = []
+            for key in running:
+                if running[key].ready(): # call has been executed
+                    ready.append(key)
+                    if running[key].successful(): # process terminated successfully
+                        done[key] = running[key]
+                    else: # process terminated with errors
+                        failed[key] = running[key]
+            for key in ready:
+                running.pop(key)
+                pools[key].close()
+                pools[key].terminate()
+                pools.pop(key)
+
+            # 3. display status
+            raise NotImplementedError()
+            entry_len = 150
+            print(''.center(entry_len,'+'))
+            print(datetime.datetime.now(dateutil.tz.tzlocal()).strftime(' %Y/%m/%d_%H:%M:%S ').center(entry_len,'-'))
+            print(('+ USER: %s (process limit: %s, utilization limit: %s%%)'%(curr_user, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
+            for i, gpuid in enumerate(list_of_gpus):
+                tup = (gpuid,)
+                tup += (user_compute_procs[i],)
+                tup += (total_compute_procs[i],)
+                tup += (user_gpu_utilization[i],)
+                tup += (total_gpu_utilization[i],)
+                tup += (total_gpumem_utilization[i],)
+                print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (--%%/%d%%)'%tup).ljust(entry_len,' '))
+            print((' %d QUEUED '%(len(queued))).center(entry_len,'-'))
+            if self.kwargs.get('logging'):
+                print((' %d LOGGING '%(len(running))).center(entry_len,'-'))
+            else:
+                print((' %d RUNNING '%(len(running))).center(entry_len,'-'))
+            for key in running:
+                name_str = os.path.basename(key)
+                try:
+                    tqdm_stat = pickle.load(open(os.path.join('/tmp', name_str + '.tqdm'), 'rb'))
+                    tqdm_str = 'gpu%s pid=%d |%d%%| %d/%d [%s<%s, %sit/s]' % tqdm_stat
+                except:
+                    tqdm_str = ''
+                name_str = '+  ' + name_str
+                print(name_str + tqdm_str.rjust(entry_len-len(name_str)))
+            print((' %d FAILED '%(len(failed))).center(entry_len,'-'))
+            for key in failed: print(os.path.basename(key))
+            print((' %d DONE '%(len(done))).center(entry_len,'-'))
+            for key in done: print(os.path.basename(key))
+            print(''.center(entry_len,'+'))
+            print('+')
+            last_log_time = time.time()
+
+            # 4. report status to scheduler
+            raise NotImplementedError()
+            shared_worker_status_q.put({
+                self.name: {
+                    'limit': vars(self.limits),
+                    'status': {
+                        'worker_compute_procs': ,
+                        'total_compute_procs': ,
+                        'worker_gpu_utilization': ,
+                        'total_gpu_utilization': ,
+                        'worker_gpumem_utilization': ,
+                        'total_gpumem_utilization':
+                    },
+                    'running': running, 'done': done, 'failed': failed, 'last_updated': time.time()
+                }
+            })
+
+            # 5. SIGINT(ctrl-c) handler
+            if self.worker_terminate:
+                self.worker_resume = prompt_yes_or_no('Resume?')
+                if self.workers_resume:
+                    IPython.embed()
+                    self.worker_terminate = False
+            if self.worker_terminate:
+                break
+            
+            # run while loop every second
+            self.rate.sleep()
+
+    def _signal_handling(self, signum, frame):
+        self.worker_terminate = True
+        print('pausing worker... Please wait!')    
 
     @staticmethod
     def worker(*args, **kwargs):
         raise NotImplementedError('Override worker method (worker function currently not specified)')
     
-    @staticmethod
-    def mp_factorizer(*args, **kwargs):
-        ##
-        # do something
-        ##
 
 NVGPUWorker.register('get_pending_job_q')
 NVGPUWorker.register('get_worker_status_q')
