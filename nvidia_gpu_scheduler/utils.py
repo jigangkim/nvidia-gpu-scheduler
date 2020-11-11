@@ -5,6 +5,7 @@ import os
 import pickle
 import pwd
 import py3nvml
+import string
 import sys
 import time
 from tqdm import tqdm
@@ -86,7 +87,13 @@ def log_tqdm(tqdm_obj, config_fname, remove=False):
         )
 
 
-def get_num_procs(allocated_gpus=[], username='all users'):
+def get_random_string(length):
+    letters = string.ascii_letters
+    result_str = ''.join(random.choice(letters) for i in range(length))
+    return result_str
+
+
+def get_num_procs(allocated_gpus=[], username='all users', version='v1'):
     """ Gets the number of processes running on each gpu
 
     Returns
@@ -122,6 +129,7 @@ def get_num_procs(allocated_gpus=[], username='all users'):
         assert num_gpus > max(allocated_gpus)
     gpu_procs = [-1]*len(allocated_gpus)
     gpu_procs_user = [-1]*len(allocated_gpus)
+    gpu_procs_pid = [[]]*len(allocated_gpus)
     for i, gpuid in enumerate(allocated_gpus):
         try:
             h = py3nvml.py3nvml.nvmlDeviceGetHandleByIndex(gpuid)
@@ -131,14 +139,21 @@ def get_num_procs(allocated_gpus=[], username='all users'):
                              ['something'])
         gpu_procs[i] = len(procs)
         procs_user = []
+        procs_pid = []
         for proc in procs:
             proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
             if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
                 procs_user.append(proc)
+            procs_pid.append(proc.pid)
         gpu_procs_user[i] = len(procs_user)
+        gpu_procs_pid[i] = procs_pid
 
     py3nvml.py3nvml.nvmlShutdown()
-    return gpu_procs, gpu_procs_user
+
+    if version == 'v1':
+        return gpu_procs, gpu_procs_user
+    elif version == 'v2':
+        return gpu_procs, gpu_procs_user, gpu_procs_pid
 
 
 def get_gpu_utilization(allocated_gpus=[]):
@@ -174,10 +189,12 @@ def get_gpu_utilization(allocated_gpus=[]):
     return gpu_rates
 
 
-def get_gpumem_utilization(allocated_gpus=[]):
+def get_gpumem_utilization(allocated_gpus=[], username='all users', version='v1'):
     '''
     Gets the memory usage of each gpu
     '''
+    if username != 'all users': pwd.getpwnam(username)
+
     # Try connect with NVIDIA drivers
     logger = logging.getLogger(__name__)
     try:
@@ -194,6 +211,8 @@ def get_gpumem_utilization(allocated_gpus=[]):
     else:
         assert num_gpus > max(allocated_gpus)
     mem_rates = [-1]*len(allocated_gpus)
+    mem_rates_user = [-1]*len(allocated_gpus)
+    mem_rates_pid = [{}]*len(allocated_gpus)
     for i, gpuid in enumerate(allocated_gpus):
         try:
             h = py3nvml.py3nvml.nvmlDeviceGetHandleByIndex(gpuid)
@@ -201,7 +220,31 @@ def get_gpumem_utilization(allocated_gpus=[]):
             continue
         info = py3nvml.utils.try_get_info(py3nvml.py3nvml.nvmlDeviceGetMemoryInfo, h,
                              ['something'])
+        procs = py3nvml.utils.try_get_info(py3nvml.py3nvml.nvmlDeviceGetComputeRunningProcesses, h,
+                             ['something'])
         mem_rates[i] = int(np.ceil(100*info.used/info.total))
+        mem_user = []
+        mem_pid = {}
+        for proc in procs:
+            proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
+            if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
+                mem_user.append(proc.usedGpuMemory)
+            mem_pid[proc.pid] = int(np.ceil(100*proc.usedGpuMemory/info.total))
+        mem_rates_user[i] = int(np.ceil(100*sum(mem_user)/info.total))
+        mem_rates_pid[i] = mem_pid
 
     py3nvml.py3nvml.nvmlShutdown()
-    return mem_rates
+
+    if version == 'v1':
+        return mem_rates
+    elif version == 'v2':
+        return mem_rates, mem_rates_user, mem_rates_pid
+
+
+if __name__ == "__main__":
+    stime = time.time()
+    print(get_num_procs(version='v2', username='jgkim-larr'))
+    print(get_gpu_utilization())
+    print(get_gpumem_utilization(version='v2', username='jgkim-larr'))
+    ftime = time.time()
+    print(ftime - stime, 'seconds')
