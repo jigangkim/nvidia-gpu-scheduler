@@ -1,10 +1,17 @@
 import argparse
 from pathlib import Path
-from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, CatchExceptions
-try: from baselines.run import main as run_baseline
-except ImportError as e: print('This example requires OpenAI baselines (https://github.com/openai/baselines)')
-try: import mujoco_py
-except ImportError as e: print('This example requires mujoco-py (https://github.com/openai/mujoco-py)')
+from nvidia_gpu_scheduler.scheduler import NVGPUScheduler_deprecated as NVGPUScheduler, CatchExceptions
+import sys
+try:
+    from baselines.run import main as run_baseline
+except ImportError as e:
+    print('This example requires OpenAI baselines (https://github.com/openai/baselines)')
+    sys.exit()
+try:
+    import mujoco_py
+except ImportError as e:
+    print('This example requires mujoco-py (https://github.com/openai/mujoco-py)')
+    sys.exit()
 
 
 def child_process(packaged_args):
@@ -70,6 +77,9 @@ if __name__ == '__main__':
     args = parser.parse_args()
     
     path_to_configs = str((Path(__file__).parent / 'example_openaibaselines_configs').resolve())
-    manager = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
-    manager.run()
-    # use CatchExceptions(child_process) to display child process traceback upon uncaught exception
+    # 1. child process does NOT display traceback upon uncaught exception by default
+    manager1 = NVGPUScheduler(child_process, path_to_configs, child_args=child_process_args, **vars(args))
+    manager1.run()
+    # 2. use CatchExceptions wrapper to display child process traceback upon uncaught exception
+    manager2 = NVGPUScheduler(CatchExceptions(child_process), path_to_configs, child_args=child_process_args, **vars(args))
+    manager2.run()

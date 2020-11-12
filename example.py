@@ -1,11 +1,11 @@
 import argparse
 from pathlib import Path
-from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, CatchExceptions
+from nvidia_gpu_scheduler.scheduler import NVGPUScheduler_deprecated as NVGPUScheduler, CatchExceptions
 
 
 def child_process(args):
-    import numpy as np
     import os
+    import random
     import time
     from tqdm import tqdm
     from nvidia_gpu_scheduler.utils import log_tqdm
@@ -21,7 +21,8 @@ def child_process(args):
     log_tqdm(pbar, config_filename, remove=True)
     pbar.close()
     # intentionally trigger with 50% probability
-    if np.random.randint(0, 2, dtype='bool'):
+    trigger_error = random.choice([True, False])
+    if trigger_error:
         raise ValueError('failed with 50% probability')
     else:
         print('succeeded with 50% probability')
