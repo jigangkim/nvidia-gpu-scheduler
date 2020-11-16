@@ -25,8 +25,8 @@ import traceback
 from types import SimpleNamespace
 import urllib.request
 
-from utils import get_num_procs, get_gpu_utilization, get_gpumem_utilization
-from utils import prompt_yes_or_no, mute_terminal as mute, log_tqdm, ROSRate, get_random_string
+from nvidia_gpu_scheduler.utils import get_num_procs, get_gpu_utilization, get_gpumem_utilization
+from nvidia_gpu_scheduler.utils import prompt_yes_or_no, mute_terminal as mute, log_tqdm, ROSRate, get_random_string
 
 
 class NVGPUScheduler(SyncManager):
@@ -214,7 +214,7 @@ class NVGPUWorker(SyncManager):
 
         # prevent SIGINT signal from affecting the manager
         signal.signal(signal.SIGINT, self._signal_handling)
-        default_sigint_handler = signal.getsignal(signal.SIGINT)
+        self.default_handler = signal.getsignal(signal.SIGINT)
 
         self.ip = ip
         self.port = port
@@ -239,7 +239,7 @@ class NVGPUWorker(SyncManager):
         gpu_job_limit=[],
         utilization_margin=0,
         time_between_jobs=0,
-        child_verbose=False,
+        subprocess_verbose=False,
         apply_limits=['user', 'worker'][0]
         ):
         self.limits = SimpleNamespace()
@@ -248,8 +248,13 @@ class NVGPUWorker(SyncManager):
         self.limits.gpu_job_limit = gpu_job_limit
         self.limits.utilization_margin = utilization_margin
         self.limits.time_between_jobs = time_between_jobs
-        self.limits.child_verbose = child_verbose
+        self.limits.subprocess_verbose = subprocess_verbose
         self.limits.apply_limits = apply_limits
+
+    def update_limits(self, **kwargs):
+        for key, value in kwargs.items():
+            if hasattr(self.limits, key):
+                setattr(self.limits, key, value)
     
     def view_limits(self):
         print('self.limits = %s'%(self.limits))
@@ -292,9 +297,9 @@ class NVGPUWorker(SyncManager):
 
             cand_gpu, cand_gpu_util, cand_gpumem_util = [], [], []
             for i, gpuid, in enumerate(list_of_gpus):
-                tot_util_cond = total_gpu_utilization_filt[i] <= (100-self.utilization_margin)
+                tot_util_cond = total_gpu_utilization_filt[i] <= (100-self.limits.utilization_margin)
                 tot_memutil_cond = total_gpumem_utilization[i] <= 50 # (1 - gpu_fraction)*100
-                user_util_cond = user_gpu_utilization_filt[i] < floor(max_utilization[i]*(100-self.utilization_margin)/100)
+                user_util_cond = user_gpu_utilization_filt[i] < floor(max_utilization[i]*(100-self.limits.utilization_margin)/100)
                 user_numproc_cond = user_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
                 if tot_util_cond and user_util_cond and user_numproc_cond and tot_memutil_cond:
                     cand_gpu.append(gpuid)
@@ -302,7 +307,6 @@ class NVGPUWorker(SyncManager):
                     cand_gpumem_util.append(total_gpumem_utilization[i])
 
             # 2. run job process
-            raise NotImplementedError()
             if shared_pending_job_q.qsize() == 0 or len(cand_gpu) == 0 or time.time() - last_job_time < self.limits.time_between_jobs: # no available GPUs or no queued tasks
                 pass
             else:
@@ -312,38 +316,46 @@ class NVGPUWorker(SyncManager):
                     # print('CUDA_VISIBLE_DEVICES = %s'%(os.environ.get('CUDA_VISIBLE_DEVICES')))
                     last_job_time = time.time()
                     continue
-                signal.signal(signal.SIGINT, signal.SIG_IGN)
-                if self.child_verbose:
-                    p = multiprocessing.Pool(processes=1)
-                else:
-                    p = multiprocessing.Pool(processes=1, initializer=mute)
-                pools[queued[0]] = p
-                with open(queued[0], 'r') as f:
-                    # running[queued[0]] = p.map_async(self.child_process, self._get_child_process_args(f))
-                    running[queued[0]] = p.apply_async(self.child_process, self._get_child_process_args(f))
-                signal.signal(signal.SIGINT, self.default_handler)
-                queued.pop(0)
-                last_job_time = time.time()
+                try:
+                    job = shared_pending_job_q.get_nowait() # {'tag': , 'config': , 'worker_args': , 'worker_kwargs': }
+                    # {'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
+                    # 'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
+
+                    signal.signal(signal.SIGINT, signal.SIG_IGN)
+                    job['worker_kwargs'].update({'config': job['config']})
+                    p = multiprocessing.Process(
+                        target=self.worker,
+                        args=job['worker_args'],
+                        kwargs=job['worker_kwargs']
+                    )
+                    procs[job['tag']] = p
+                    p.start()
+                    running[job['tag']] = p
+                    signal.signal(signal.SIGINT, self.default_handler)
+                    
+                    last_job_time = time.time()
+                except queue.Empty:
+                    pass
             # update thread status
             ready = []
             for key in running:
-                if running[key].ready(): # call has been executed
+                if not running[key].is_alive(): # call has been executed
                     ready.append(key)
-                    if running[key].successful(): # process terminated successfully
+                    if running[key].exitcode : # process terminated successfully
                         done[key] = running[key]
                     else: # process terminated with errors
                         failed[key] = running[key]
             for key in ready:
                 running.pop(key)
-                pools[key].close()
-                pools[key].terminate()
-                pools.pop(key)
+                procs[key].terminate()
+                # procs[key].close()
+                procs.pop(key)
 
             # 3. display status
-            raise NotImplementedError()
             entry_len = 150
             print(''.center(entry_len,'+'))
             print(datetime.datetime.now(dateutil.tz.tzlocal()).strftime(' %Y/%m/%d_%H:%M:%S ').center(entry_len,'-'))
+            # worker status
             print(('+ USER: %s (process limit: %s, utilization limit: %s%%)'%(curr_user, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
             for i, gpuid in enumerate(list_of_gpus):
                 tup = (gpuid,)
@@ -351,13 +363,16 @@ class NVGPUWorker(SyncManager):
                 tup += (total_compute_procs[i],)
                 tup += (user_gpu_utilization[i],)
                 tup += (total_gpu_utilization[i],)
+                tup += (user_gpumem_utilization[i],)
                 tup += (total_gpumem_utilization[i],)
-                print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (--%%/%d%%)'%tup).ljust(entry_len,' '))
-            print((' %d QUEUED '%(len(queued))).center(entry_len,'-'))
-            if self.kwargs.get('logging'):
-                print((' %d LOGGING '%(len(running))).center(entry_len,'-'))
-            else:
-                print((' %d RUNNING '%(len(running))).center(entry_len,'-'))
+                print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
+            # job status
+            print((' %d PENDING '%(shared_pending_job_q.qsize())).center(entry_len,'-'))
+            # if self.kwargs.get('logging'):
+            #     print((' %d LOGGING '%(len(running))).center(entry_len,'-'))
+            # else:
+            #     print((' %d RUNNING '%(len(running))).center(entry_len,'-'))
+            print((' %d LOGGING/RUNNING '%(len(running))).center(entry_len,'-'))
             for key in running:
                 name_str = os.path.basename(key)
                 try:
@@ -376,26 +391,28 @@ class NVGPUWorker(SyncManager):
             last_log_time = time.time()
 
             # 4. report status to scheduler
-            raise NotImplementedError()
             shared_worker_status_q.put({
                 self.name: {
                     'limit': vars(self.limits),
                     'status': {
-                        'worker_compute_procs': ,
-                        'total_compute_procs': ,
-                        'worker_gpu_utilization': ,
-                        'total_gpu_utilization': ,
-                        'worker_gpumem_utilization': ,
-                        'total_gpumem_utilization':
+                        'worker_compute_procs': user_compute_procs,
+                        'total_compute_procs': total_compute_procs,
+                        'worker_gpu_utilization': user_gpu_utilization,
+                        'total_gpu_utilization': total_gpu_utilization,
+                        'worker_gpumem_utilization': user_gpumem_utilization,
+                        'total_gpumem_utilization': total_gpumem_utilization
                     },
-                    'running': running, 'done': done, 'failed': failed, 'last_updated': time.time()
+                    'running': OrderedDict(((key, None) for key in running)),
+                    'done': OrderedDict(((key, None) for key in done)),
+                    'failed': OrderedDict(((key, None) for key in failed)),
+                    'last_updated': time.time()
                 }
             })
 
             # 5. SIGINT(ctrl-c) handler
             if self.worker_terminate:
                 self.worker_resume = prompt_yes_or_no('Resume?')
-                if self.workers_resume:
+                if self.worker_resume:
                     IPython.embed()
                     self.worker_terminate = False
             if self.worker_terminate:
@@ -404,12 +421,21 @@ class NVGPUWorker(SyncManager):
             # run while loop every second
             self.rate.sleep()
 
+        print('summary - done: %d, failed: %d, halted: %d, pending: %d' % (len(done), len(failed), len(running), shared_pending_job_q.qsize()))
+
     def _signal_handling(self, signum, frame):
         self.worker_terminate = True
-        print('pausing worker... Please wait!')    
+        print('pausing worker... Please wait!')
+
+    def worker(self, *args, **kwargs):
+        if not self.limits.subprocess_verbose:
+            mute()
+            self.worker_function(*args, **kwargs)
+        else:
+            self.worker_function(*args, **kwargs)
 
     @staticmethod
-    def worker(*args, **kwargs):
+    def worker_function(*args, **kwargs):
         raise NotImplementedError('Override worker method (worker function currently not specified)')
     
 
@@ -643,76 +669,28 @@ class CatchExceptions(object):
         return result
 
 
-# def child_process(args):
-#     n = 5
-#     pbar = tqdm(total=n)
-#     config_filename = os.path.basename(args.config_dir)
-#     log_tqdm(pbar, config_filename)
-#     for i in range(n):
-#         time.sleep(1)
-#         pbar.update(n=1)
-#         log_tqdm(pbar, config_filename)
-#     log_tqdm(pbar, config_filename, remove=True)
-#     pbar.close()
-#     # intentionally trigger with 50% probability
-#     if np.random.randint(0, 2, dtype='bool'):
-#         raise ValueError('failed with 50% probability')
-#     else:
-#         print('succeeded with 50% probability')
-
-
-# def child_process_args(f, logging=False):
-#         # reconstruct arguments
-#         params = json.load(f, object_hook=lambda d : SimpleNamespace(**d)) # read json as namespace
-#         args = SimpleNamespace()
-#         if hasattr(params, 'ddpg'):
-#             args.config_type = 'ddpg'
-#         elif hasattr(params, 'lnt'):
-#             args.config_type = 'lnt-ddpg'
-#         else:
-#             raise ValueError('Cannot find CONFIG_TYPE!')
-#         args.config_dir = f.name
-#         args.absolute_path = True
-#         args.logging = logging
-#         args.render = False
-#         args.resume = False
-#         args.playback = False
-#         return args
-
-
-# def run_example():
-#     '''
-#     Simple example
-    
-#     User should provide child process function and child process argument function.
-#     Incorporating nvidia_gpu_scheduler.utils.log_tqdm into the chlid process function is recommended to track child process progress.
-#     '''
-#     path_to_configs = str((Path(__file__).parent / '../example_configs').resolve())
-#     manager = NVGPUScheduler(child_process, path_to_configs,
-#         child_args=child_process_args,
-#         available_gpus=[0,1,2,3],
-#         config_fname_extension='.json',
-#         max_gpu_utilization=[100,100,30,30],
-#         max_jobs_per_gpu=[5,5,5,5],
-#         utilization_margin=5,
-#         time_between_tasks=3,
-#         child_verbose=False,
-#         logging=False
-#     )
-#     manager.run()
-
 if __name__ == '__main__':
-    # run_example()
 
-    # scheduler
-    scheduler = NVGPUScheduler(55555, 'hello')
-    scheduler.start()
-    scheduler.run(path_to_configs='/home/jgkim-larr/my_python_packages/nvidia-gpu-scheduler/example_configs',
-        config_extension='.json'
-    )
-    # worker
-    # worker = NVGPUWorker('127.0.0.1', 55555, 'hello')
-    # worker.connect()
-    # worker.run()
+    identity = ['scheduler', 'worker'][1]
 
-    pass
+    if identity == 'scheduler':
+        scheduler = NVGPUScheduler(55555, 'hello')
+        scheduler.start()
+        scheduler.run(path_to_configs='/home/jgkim-larr/my_python_packages/nvidia-gpu-scheduler/example_configs',
+            config_extension='.json'
+        )
+    elif identity == 'worker':
+        # worker
+        worker = NVGPUWorker('127.0.0.1', 55555, 'hello')
+        worker.connect()
+        worker.update_limits(
+            available_gpus=[0,1],
+            gpu_utilization_limit=[100,100],
+            gpu_job_limit=[0,1],
+            utilization_margin=0,
+            time_between_jobs=30,
+            subprocess_verbose=True,
+            apply_limits='user'
+        )
+        worker.run()
+
