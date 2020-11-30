@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 import argparse
 from collections import OrderedDict
 import copy
@@ -39,11 +40,11 @@ class NVGPUScheduler(SyncManager):
 
         NVGPUScheduler.counter += 1
         if NVGPUScheduler.counter > 1:
-            raise Exception('More than one instance of NVGPUScheduler already exist! (existing instances: %d)'%(NVGPUScheduler.counter))
+            raise Exception('An instance of NVGPUScheduler already exist! (existing instances: %d)'%(NVGPUScheduler.counter))
 
         # prevent SIGINT signal from affecting the manager
         signal.signal(signal.SIGINT, self._signal_handling)
-        default_sigint_handler = signal.getsignal(signal.SIGINT)
+        self.default_handler = signal.getsignal(signal.SIGINT)
 
         if ip_type == 'public':
             self.ip = urllib.request.urlopen('https://api.ipify.org/').read().decode('utf8')
@@ -111,8 +112,10 @@ class NVGPUScheduler(SyncManager):
         while shared_pending_job_q.qsize() + sum([len(x['running']) for _, x in worker_status.items()]) > 0:
             # 1. update worker_status
             try:
-                outdict = shared_worker_status_q.get_nowait()
-                worker_status.update(outdict)
+                while True:
+                    outdict = shared_worker_status_q.get_nowait()
+                    for name, status in outdict.items(): status['last_updated'] = time.time()
+                    worker_status.update(outdict)
             except queue.Empty:
                 pass
             
@@ -120,16 +123,19 @@ class NVGPUScheduler(SyncManager):
             entry_len = 150
             print(''.center(entry_len,'+'))
             print(datetime.datetime.now(dateutil.tz.tzlocal()).strftime(' %Y/%m/%d_%H:%M:%S ').center(entry_len,'-'))
+            print('+ SCHEDULER: %d worker(s) connected'%(len(worker_status)))
             # worker status
             for name, status in worker_status.items():
                 gpu_ids = status['limit']['available_gpus']
                 job_limit = status['limit']['gpu_job_limit']
                 util_limit = status['limit']['gpu_utilization_limit']
-                print(('+ WORKER: %s (gpu id: %s, job limit: %s, util limit: %s%%)'%(name, gpu_ids, job_limit, util_limit)).ljust(entry_len,' '))
+                last_updated_seconds_ago = time.time() - status['last_updated']
+                print(('+ (worker=%s, gpu_ids=%s, job_limit=%s, util_limit=%s, last_updated=%ds ago)'%(name, gpu_ids, job_limit, util_limit, last_updated_seconds_ago)).ljust(entry_len,' '))
                 worker_compute_procs = status['status']['worker_compute_procs']
                 total_compute_procs = status['status']['total_compute_procs']
                 worker_gpu_utilization = status['status']['worker_gpu_utilization']
                 total_gpu_utilization = status['status']['total_gpu_utilization']
+                worker_gpumem_utilization = status['status']['worker_gpumem_utilization']
                 total_gpumem_utilization = status['status']['total_gpumem_utilization']
                 for i, gpu_id in enumerate(gpu_ids):
                     tup = (gpu_id,)
@@ -137,8 +143,9 @@ class NVGPUScheduler(SyncManager):
                     tup += (total_compute_procs[i],)
                     tup += (worker_gpu_utilization[i],)
                     tup += (total_gpu_utilization[i],)
+                    tup += (worker_gpumem_utilization[i],)
                     tup += (total_gpumem_utilization[i],)
-                    print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (--%%/%d%%)'%tup).ljust(entry_len,' '))
+                    print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
             # job status
             print((' %d PENDING '%(shared_pending_job_q.qsize())).center(entry_len,'-'))
             num_running = sum([len(status['running']) for name, status in worker_status.items()])
@@ -171,9 +178,11 @@ class NVGPUScheduler(SyncManager):
             print('+')
 
             # 3. exception handling for unresponsive worker(s)
+            unresponsive_workers = []
             for name, status in worker_status.items():
-                if status['last_updated'] - time.time() > 600:
-                    print('worker %s has been unresponsive for 10 min!')
+                if time.time() - status['last_updated'] > 60:
+                    print('worker %s has been unresponsive for 10 min!'%(name))
+                    unresponsive_workers.append(name)
                     unresponsive_running = status['running']
                     for path in unresponsive_running:
                         # set unresponsive running jobs back to pending jobs
@@ -181,6 +190,8 @@ class NVGPUScheduler(SyncManager):
                             shared_pending_job_q.put({'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
                                 'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
                             )
+            for name in unresponsive_workers:
+                worker_status.pop(name)
 
             # 4. SIGINT(ctrl-c) handler
             if self.scheduler_terminate:
@@ -208,7 +219,7 @@ NVGPUScheduler.register('get_pending_job_q', callable=lambda: NVGPUScheduler.pen
 NVGPUScheduler.register('get_worker_status_q', callable=lambda: NVGPUScheduler.worker_status_q)
 
 
-class NVGPUWorker(SyncManager):
+class NVGPUWorker(SyncManager, ABC):
 
     def __init__(self, ip, port, authkey, name=None):
 
@@ -222,9 +233,8 @@ class NVGPUWorker(SyncManager):
         super(NVGPUWorker, self).__init__(address=(self.ip, self.port), authkey=str.encode(authkey))
         print('Configured NVGPUWorker')
 
-        self.set_limits()
         print('Resource limits set to default profile:')
-        self.view_limits()
+        self.set_limits()
 
         self.rate = ROSRate(1)
 
@@ -250,11 +260,13 @@ class NVGPUWorker(SyncManager):
         self.limits.time_between_jobs = time_between_jobs
         self.limits.subprocess_verbose = subprocess_verbose
         self.limits.apply_limits = apply_limits
+        print('worker limits set to %s'%(self.limits))
 
     def update_limits(self, **kwargs):
         for key, value in kwargs.items():
             if hasattr(self.limits, key):
                 setattr(self.limits, key, value)
+        print('worker limits updated to %s'%(self.limits))
     
     def view_limits(self):
         print('self.limits = %s'%(self.limits))
@@ -278,7 +290,8 @@ class NVGPUWorker(SyncManager):
         total_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
         user_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
         worker_gpu_utilization_filt = {gpu_id: 0.0 for gpu_id in self.limits.available_gpus}
-        while shared_pending_job_q.qsize() + len(running):
+        num_pending = shared_pending_job_q.qsize()
+        while num_pending + len(running):
             curr_user = getpass.getuser()
             list_of_gpus = self.limits.available_gpus
             max_utilization = self.limits.gpu_utilization_limit
@@ -307,22 +320,23 @@ class NVGPUWorker(SyncManager):
                     cand_gpumem_util.append(total_gpumem_utilization[i])
 
             # 2. run job process
-            if shared_pending_job_q.qsize() == 0 or len(cand_gpu) == 0 or time.time() - last_job_time < self.limits.time_between_jobs: # no available GPUs or no queued tasks
+            if len(cand_gpu) == 0 or time.time() - last_job_time < self.limits.time_between_jobs: # no available GPUs or no queued tasks
                 pass
             else:
                 min_util_idx = cand_gpu_util.index(min(cand_gpu_util))
                 if py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=0.5, max_procs=-1) == 0:
                     # if for some reason cannot allocate gpu
                     # print('CUDA_VISIBLE_DEVICES = %s'%(os.environ.get('CUDA_VISIBLE_DEVICES')))
-                    last_job_time = time.time()
+                    # last_job_time = time.time()
                     continue
                 try:
                     job = shared_pending_job_q.get_nowait() # {'tag': , 'config': , 'worker_args': , 'worker_kwargs': }
+                    num_pending -= 1
                     # {'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
                     # 'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
 
                     signal.signal(signal.SIGINT, signal.SIG_IGN)
-                    job['worker_kwargs'].update({'config': job['config']})
+                    job['worker_kwargs'].update({'config': job['config'], 'config_path': job['tag']})
                     p = multiprocessing.Process(
                         target=self.worker,
                         args=job['worker_args'],
@@ -336,12 +350,14 @@ class NVGPUWorker(SyncManager):
                     last_job_time = time.time()
                 except queue.Empty:
                     pass
+                except (EOFError, BrokenPipeError) as e:
+                    print('lost connection to server')
             # update thread status
             ready = []
             for key in running:
                 if not running[key].is_alive(): # call has been executed
                     ready.append(key)
-                    if running[key].exitcode : # process terminated successfully
+                    if running[key].exitcode == 0: # process terminated successfully
                         done[key] = running[key]
                     else: # process terminated with errors
                         failed[key] = running[key]
@@ -356,7 +372,8 @@ class NVGPUWorker(SyncManager):
             print(''.center(entry_len,'+'))
             print(datetime.datetime.now(dateutil.tz.tzlocal()).strftime(' %Y/%m/%d_%H:%M:%S ').center(entry_len,'-'))
             # worker status
-            print(('+ USER: %s (process limit: %s, utilization limit: %s%%)'%(curr_user, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
+            print('+ WORKER: %s (UNIX username: %s)'%(self.name, curr_user))
+            print(('+ (gpu_ids=%s, job_limit=%s, util_limit=%s%%)'%(list_of_gpus, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
             for i, gpuid in enumerate(list_of_gpus):
                 tup = (gpuid,)
                 tup += (user_compute_procs[i],)
@@ -367,18 +384,21 @@ class NVGPUWorker(SyncManager):
                 tup += (total_gpumem_utilization[i],)
                 print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
             # job status
-            print((' %d PENDING '%(shared_pending_job_q.qsize())).center(entry_len,'-'))
+            print((' %d PENDING '%(num_pending)).center(entry_len,'-'))
             # if self.kwargs.get('logging'):
             #     print((' %d LOGGING '%(len(running))).center(entry_len,'-'))
             # else:
             #     print((' %d RUNNING '%(len(running))).center(entry_len,'-'))
             print((' %d LOGGING/RUNNING '%(len(running))).center(entry_len,'-'))
+            tqdm_stats = []
             for key in running:
                 name_str = os.path.basename(key)
                 try:
                     tqdm_stat = pickle.load(open(os.path.join('/tmp', name_str + '.tqdm'), 'rb'))
+                    tqdm_stats.append(tqdm_stat)
                     tqdm_str = 'gpu%s pid=%d |%d%%| %d/%d [%s<%s, %sit/s]' % tqdm_stat
                 except:
+                    tqdm_stats.append(None)
                     tqdm_str = ''
                 name_str = '+  ' + name_str
                 print(name_str + tqdm_str.rjust(entry_len-len(name_str)))
@@ -388,26 +408,28 @@ class NVGPUWorker(SyncManager):
             for key in done: print(os.path.basename(key))
             print(''.center(entry_len,'+'))
             print('+')
-            last_log_time = time.time()
 
             # 4. report status to scheduler
-            shared_worker_status_q.put({
-                self.name: {
-                    'limit': vars(self.limits),
-                    'status': {
-                        'worker_compute_procs': user_compute_procs,
-                        'total_compute_procs': total_compute_procs,
-                        'worker_gpu_utilization': user_gpu_utilization,
-                        'total_gpu_utilization': total_gpu_utilization,
-                        'worker_gpumem_utilization': user_gpumem_utilization,
-                        'total_gpumem_utilization': total_gpumem_utilization
-                    },
-                    'running': OrderedDict(((key, None) for key in running)),
-                    'done': OrderedDict(((key, None) for key in done)),
-                    'failed': OrderedDict(((key, None) for key in failed)),
-                    'last_updated': time.time()
-                }
-            })
+            try:
+                shared_worker_status_q.put({
+                    self.name: {
+                        'limit': vars(self.limits),
+                        'status': {
+                            'worker_compute_procs': user_compute_procs,
+                            'total_compute_procs': total_compute_procs,
+                            'worker_gpu_utilization': user_gpu_utilization,
+                            'total_gpu_utilization': total_gpu_utilization,
+                            'worker_gpumem_utilization': user_gpumem_utilization,
+                            'total_gpumem_utilization': total_gpumem_utilization
+                        },
+                        'running': OrderedDict(((key, tqdm_stat) for key, tqdm_stat in zip(running, tqdm_stats))),
+                        'done': OrderedDict(((key, None) for key in done)),
+                        'failed': OrderedDict(((key, None) for key in failed)),
+                        'last_updated': time.time()
+                    }
+                })
+            except (EOFError, BrokenPipeError) as e: # lost connection to server
+                print('lost connection to server')
 
             # 5. SIGINT(ctrl-c) handler
             if self.worker_terminate:
@@ -416,12 +438,16 @@ class NVGPUWorker(SyncManager):
                     IPython.embed()
                     self.worker_terminate = False
             if self.worker_terminate:
+                for key in running:
+                    running[key].terminate()
                 break
             
             # run while loop every second
             self.rate.sleep()
+            try: num_pending = shared_pending_job_q.qsize()
+            except (EOFError, BrokenPipeError) as e: print('lost connection to server') # lost connection to server
 
-        print('summary - done: %d, failed: %d, halted: %d, pending: %d' % (len(done), len(failed), len(running), shared_pending_job_q.qsize()))
+        print('summary - done: %d, failed: %d, halted: %d, pending: %d' % (len(done), len(failed), len(running), num_pending))
 
     def _signal_handling(self, signum, frame):
         self.worker_terminate = True
@@ -435,8 +461,9 @@ class NVGPUWorker(SyncManager):
             self.worker_function(*args, **kwargs)
 
     @staticmethod
-    def worker_function(*args, **kwargs):
-        raise NotImplementedError('Override worker method (worker function currently not specified)')
+    @abstractmethod
+    def worker_function(*args, config_path=None, config=None, **kwargs):
+        pass
     
 
 NVGPUWorker.register('get_pending_job_q')
@@ -680,8 +707,12 @@ if __name__ == '__main__':
             config_extension='.json'
         )
     elif identity == 'worker':
-        # worker
-        worker = NVGPUWorker('127.0.0.1', 55555, 'hello')
+        class MyWorker(NVGPUWorker):
+            @staticmethod
+            def worker_function(*args, config_path=None, config=None, **kwargs):
+                while True: time.sleep(1)
+
+        worker = MyWorker('127.0.0.1', 55555, 'hello')
         worker.connect()
         worker.update_limits(
             available_gpus=[0,1],
@@ -693,4 +724,3 @@ if __name__ == '__main__':
             apply_limits='user'
         )
         worker.run()
-
