@@ -109,7 +109,9 @@ class NVGPUScheduler(SyncManager):
         worker_status = OrderedDict()
 
         self.rate.reset()
-        while shared_pending_job_q.qsize() + sum([len(x['running']) for _, x in worker_status.items()]) > 0:
+
+        num_pending = shared_pending_job_q.qsize()
+        while num_pending + sum([len(x['running']) for _, x in worker_status.items()]) > 0:
             # 1. update worker_status
             try:
                 while True:
@@ -118,6 +120,7 @@ class NVGPUScheduler(SyncManager):
                     worker_status.update(outdict)
             except queue.Empty:
                 pass
+            num_pending = shared_pending_job_q.qsize()
             
             # 2. display worker_status
             entry_len = 150
@@ -147,7 +150,7 @@ class NVGPUScheduler(SyncManager):
                     tup += (total_gpumem_utilization[i],)
                     print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
             # job status
-            print((' %d PENDING '%(shared_pending_job_q.qsize())).center(entry_len,'-'))
+            print((' %d PENDING '%(num_pending)).center(entry_len,'-'))
             num_running = sum([len(status['running']) for name, status in worker_status.items()])
             if worker_kwargs.get('logging'): print((' %d LOGGING '%(num_running)).center(entry_len,'-'))
             else: print((' %d RUNNING '%(num_running)).center(entry_len,'-'))
@@ -201,7 +204,7 @@ class NVGPUScheduler(SyncManager):
                     self.scheduler_terminate = False
             if self.scheduler_terminate:
                 break
-            
+
             # run while loop every second
             self.rate.sleep()
 

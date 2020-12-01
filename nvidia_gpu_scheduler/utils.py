@@ -1,4 +1,5 @@
 import datetime
+import errno
 import logging
 import numpy as np
 import os
@@ -83,9 +84,13 @@ def log_tqdm(tqdm_obj, config_fname, remove=False):
         except: tqdm_stat += ('?',)
         try: tqdm_stat += (round(d['rate'],2),)
         except: tqdm_stat += ('?',)
-        pickle.dump(tqdm_stat,
-            open(os.path.join('/tmp', config_fname + '.tqdm'), 'wb')
-        )
+        try:
+            pickle.dump(tqdm_stat,
+                open(os.path.join('/tmp', config_fname + '.tqdm'), 'wb')
+            )
+        except OSError as e:
+            if e.errno == errno.ENOENT: print('log_tqdm: No such file of directory')
+            elif e.errno == errno.ENOSPC: print('log_tqdm: No space left on device')
 
 
 def get_random_string(length):
