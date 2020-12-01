@@ -3,51 +3,51 @@ from pathlib import Path
 from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, NVGPUWorker, CatchExceptions
 
 
-def child_process(args):
-    import os
-    import random
-    import time
-    from tqdm import tqdm
-    from nvidia_gpu_scheduler.utils import log_tqdm
+# def child_process(args):
+#     import os
+#     import random
+#     import time
+#     from tqdm import tqdm
+#     from nvidia_gpu_scheduler.utils import log_tqdm
 
-    n = 10
-    pbar = tqdm(total=n)
-    config_filename = os.path.basename(args.config_dir)
-    log_tqdm(pbar, config_filename)
-    for i in range(n):
-        time.sleep(1)
-        pbar.update(n=1)
-        log_tqdm(pbar, config_filename)
-    log_tqdm(pbar, config_filename, remove=True)
-    pbar.close()
-    # intentionally trigger with 50% probability
-    trigger_error = random.choice([True, False])
-    if trigger_error:
-        raise ValueError('failed with 50% probability')
-    else:
-        print('succeeded with 50% probability')
+#     n = 10
+#     pbar = tqdm(total=n)
+#     config_filename = os.path.basename(args.config_dir)
+#     log_tqdm(pbar, config_filename)
+#     for i in range(n):
+#         time.sleep(1)
+#         pbar.update(n=1)
+#         log_tqdm(pbar, config_filename)
+#     log_tqdm(pbar, config_filename, remove=True)
+#     pbar.close()
+#     # intentionally trigger with 50% probability
+#     trigger_error = random.choice([True, False])
+#     if trigger_error:
+#         raise ValueError('failed with 50% probability')
+#     else:
+#         print('succeeded with 50% probability')
 
 
-def child_process_args(f, logging=False, **kwargs):
-    import json
-    from types import SimpleNamespace
+# def child_process_args(f, logging=False, **kwargs):
+#     import json
+#     from types import SimpleNamespace
 
-    # reconstruct arguments
-    params = json.load(f, object_hook=lambda d : SimpleNamespace(**d)) # read json as namespace
-    args = SimpleNamespace()
-    if hasattr(params, 'ddpg'):
-        args.config_type = 'ddpg'
-    elif hasattr(params, 'lnt'):
-        args.config_type = 'lnt-ddpg'
-    else:
-        raise ValueError('Cannot find CONFIG_TYPE!')
-    args.config_dir = f.name
-    args.absolute_path = True
-    args.logging = logging
-    args.render = False
-    args.resume = False
-    args.playback = False
-    return args
+#     # reconstruct arguments
+#     params = json.load(f, object_hook=lambda d : SimpleNamespace(**d)) # read json as namespace
+#     args = SimpleNamespace()
+#     if hasattr(params, 'ddpg'):
+#         args.config_type = 'ddpg'
+#     elif hasattr(params, 'lnt'):
+#         args.config_type = 'lnt-ddpg'
+#     else:
+#         raise ValueError('Cannot find CONFIG_TYPE!')
+#     args.config_dir = f.name
+#     args.absolute_path = True
+#     args.logging = logging
+#     args.render = False
+#     args.resume = False
+#     args.playback = False
+#     return args
 
 
 class ExampleWorker(NVGPUWorker):
