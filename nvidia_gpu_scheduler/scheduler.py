@@ -251,6 +251,7 @@ class NVGPUWorker(SyncManager, ABC):
         gpu_utilization_limit=[],
         gpu_job_limit=[],
         utilization_margin=0,
+        max_gpu_mem_usage=50,
         time_between_jobs=0,
         subprocess_verbose=False,
         apply_limits=['user', 'worker'][0]
@@ -260,6 +261,7 @@ class NVGPUWorker(SyncManager, ABC):
         self.limits.gpu_utilization_limit = gpu_utilization_limit
         self.limits.gpu_job_limit = gpu_job_limit
         self.limits.utilization_margin = utilization_margin
+        self.limits.max_gpu_mem_usage = max_gpu_mem_usage
         self.limits.time_between_jobs = time_between_jobs
         self.limits.subprocess_verbose = subprocess_verbose
         self.limits.apply_limits = apply_limits
@@ -303,6 +305,7 @@ class NVGPUWorker(SyncManager, ABC):
             # 1. update candidate GPU
             total_compute_procs, user_compute_procs, pid_compute_procs = \
                 get_num_procs(allocated_gpus=list_of_gpus, username=curr_user, version='v2')
+            worker_compute_procs = copy.deepcopy(user_compute_procs)
             total_gpu_utilization = get_gpu_utilization(allocated_gpus=list_of_gpus)
             user_gpu_utilization = [ceil(x/(y+1e-12)*z) for x, y, z in zip(user_compute_procs, total_compute_procs, total_gpu_utilization)]
             total_gpumem_utilization, user_gpumem_utilization, pid_gpumem_utilization = \
@@ -313,11 +316,28 @@ class NVGPUWorker(SyncManager, ABC):
 
             cand_gpu, cand_gpu_util, cand_gpumem_util = [], [], []
             for i, gpuid, in enumerate(list_of_gpus):
+                if gpuid < 0: # CPU mode
+                    all_pid_compute_procs = [item for sublist in pid_compute_procs for item in sublist]
+                    worker_compute_procs[i] = sum([running[key].pid not in all_pid_compute_procs for key in running])
+                    user_compute_procs[i] = worker_compute_procs[i]
+                else:
+                    worker_compute_procs[i] = sum([running[key].pid in pid_compute_procs[i] for key in running])
+
                 tot_util_cond = total_gpu_utilization_filt[i] <= (100-self.limits.utilization_margin)
-                tot_memutil_cond = total_gpumem_utilization[i] <= 50 # (1 - gpu_fraction)*100
+                tot_memutil_cond = total_gpumem_utilization[i] <= self.limits.max_gpu_mem_usage # (1 - gpu_fraction)*100
                 user_util_cond = user_gpu_utilization_filt[i] < floor(max_utilization[i]*(100-self.limits.utilization_margin)/100)
                 user_numproc_cond = user_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
-                if tot_util_cond and user_util_cond and user_numproc_cond and tot_memutil_cond:
+                worker_numproc_cond = worker_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
+                
+                if self.limits.apply_limits == 'user':
+                    is_cand = tot_util_cond and user_util_cond and user_numproc_cond and tot_memutil_cond 
+                elif self.limits.apply_limits == 'worker':
+                    is_cand = tot_util_cond and worker_numproc_cond and tot_memutil_cond
+                else:
+                    is_cand = False
+                    print("Invalid apply_limits. Available options are ['user', 'worker']")
+
+                if is_cand:
                     cand_gpu.append(gpuid)
                     cand_gpu_util.append(total_gpu_utilization_filt[i])
                     cand_gpumem_util.append(total_gpumem_utilization[i])
@@ -327,7 +347,13 @@ class NVGPUWorker(SyncManager, ABC):
                 pass
             else:
                 min_util_idx = cand_gpu_util.index(min(cand_gpu_util))
-                if py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=0.5, max_procs=-1) == 0:
+                min_util_cand_gpu = cand_gpu[min_util_idx]
+                if min_util_cand_gpu < 0: # CPU mode
+                    os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+                    grab_device_success = True
+                else:
+                    grab_device_success = py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=(100 - self.limits.max_gpu_mem_usage)/100, max_procs=-1) > 0
+                if not grab_device_success:
                     # if for some reason cannot allocate gpu
                     # print('CUDA_VISIBLE_DEVICES = %s'%(os.environ.get('CUDA_VISIBLE_DEVICES')))
                     # last_job_time = time.time()
@@ -375,17 +401,23 @@ class NVGPUWorker(SyncManager, ABC):
             print(''.center(entry_len,'+'))
             print(datetime.datetime.now(dateutil.tz.tzlocal()).strftime(' %Y/%m/%d_%H:%M:%S ').center(entry_len,'-'))
             # worker status
-            print('+ WORKER: %s (UNIX username: %s)'%(self.name, curr_user))
+            if self.limits.apply_limits == 'user':
+                print('+ WORKER: %s (apply limits on user %s)'%(self.name, curr_user))
+            elif self.limits.apply_limits == 'worker':
+                print('+ WORKER: %s (apply limits on current worker)'%(self.name))
+            else:
+                print("Invalid apply_limits. Available options are ['user', 'worker']")
             print(('+ (gpu_ids=%s, job_limit=%s, util_limit=%s%%)'%(list_of_gpus, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
             for i, gpuid in enumerate(list_of_gpus):
                 tup = (gpuid,)
                 tup += (user_compute_procs[i],)
+                tup += (worker_compute_procs[i],)
                 tup += (total_compute_procs[i],)
                 tup += (user_gpu_utilization[i],)
                 tup += (total_gpu_utilization[i],)
                 tup += (user_gpumem_utilization[i],)
                 tup += (total_gpumem_utilization[i],)
-                print(('+  gpu%d compute processes (%d/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
+                print(('+  gpu%d compute processes (%d(%d)/%d) utilization rate (%d%%/%d%%) memory usage (%d%%/%d%%)'%tup).ljust(entry_len,' '))
             # job status
             print((' %d PENDING '%(num_pending)).center(entry_len,'-'))
             # if self.kwargs.get('logging'):

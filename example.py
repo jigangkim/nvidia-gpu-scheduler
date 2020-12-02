@@ -96,9 +96,9 @@ if __name__ == "__main__":
         worker = ExampleWorker('127.0.0.1', 55555, 'simple_example', name='local')
         worker.connect()
         worker.update_limits(
-            available_gpus=[0,1,2,3],
-            gpu_utilization_limit=[100,100,100,100],
-            gpu_job_limit=[3,3,1,1],
+            available_gpus=[-1,0,1,2,3],
+            gpu_utilization_limit=[100,100,100,100,100],
+            gpu_job_limit=[3,2,1,1,2],
             utilization_margin=5,
             time_between_jobs=3,
             subprocess_verbose=False,
