@@ -1,6 +1,8 @@
 import argparse
 from pathlib import Path
-from nvidia_gpu_scheduler.scheduler import NVGPUScheduler, NVGPUWorker, CatchExceptions
+from nvidia_gpu_scheduler.scheduler import NVGPUScheduler
+from nvidia_gpu_scheduler.worker import NVGPUWorker
+from nvidia_gpu_scheduler.utils import CatchExceptions
 
 
 # def child_process(args):

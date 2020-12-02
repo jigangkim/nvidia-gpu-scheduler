@@ -11,7 +11,26 @@ import string
 import sys
 import time
 from tqdm import tqdm
+import traceback
 import warnings
+
+
+# https://stackoverflow.com/questions/6728236/exception-thrown-in-multiprocessing-pool-not-detected
+class CatchExceptions(object):
+    '''
+    Wrapper for callable enabling child process exception/traceback catching
+    '''
+    def __init__(self, callable):
+        self.__callable = callable
+
+
+    def __call__(self, *args, **kwargs):
+        try:
+            result = self.__callable(*args, **kwargs)
+        except Exception as e:
+            print(traceback.format_exc())
+            raise
+        return result
 
 
 class ROSRate(object):
