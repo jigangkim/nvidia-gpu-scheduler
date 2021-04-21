@@ -161,13 +161,24 @@ class NVGPUWorker(SyncManager, ABC):
                     # last_job_time = time.time()
                     continue
                 try:
-                    job = shared_pending_job_q.get_nowait() # {'tag': , 'config': , 'worker_args': , 'worker_kwargs': }
+                    job = shared_pending_job_q.get_nowait() # {'tag': , 'config_byte': , 'worker_args': , 'worker_kwargs': }
                     num_pending -= 1
                     # {'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
                     # 'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
 
                     signal.signal(signal.SIGINT, signal.SIG_IGN)
-                    job['worker_kwargs'].update({'config': job['config'], 'config_path': job['tag']})
+
+                    # recover namespace object if type is json
+                    tmp_filepath = '/tmp/%s'%(job['tag'].replace('/','_'))
+                    if os.path.splitext(tmp_filepath)[-1] == '.json':
+                        with open(tmp_filepath,'wb') as f:
+                            f.write(job['config_byte'])
+                        with open(tmp_filepath,'r') as f:
+                            job['config'] = json.load(f, object_hook=lambda d : SimpleNamespace(**d))
+                        os.remove(tmp_filepath)
+                        job['worker_kwargs'].update({'config': job['config'], 'config_byte': job['config_byte'], 'config_path': job['tag']})
+                    else:
+                        job['worker_kwargs'].update({'config_byte': job['config_byte'], 'config_path': job['tag']})
                     p = multiprocessing.Process(
                         target=self.worker,
                         args=job['worker_args'],

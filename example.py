@@ -54,7 +54,7 @@ from nvidia_gpu_scheduler.utils import CatchExceptions
 
 class ExampleWorker(NVGPUWorker):
     @staticmethod
-    def worker_function(*args, config_path=None, config=None, **kwargs):
+    def worker_function(*args, config_path=None, config=None, config_byte=None, **kwargs):
         import os
         import random
         import time

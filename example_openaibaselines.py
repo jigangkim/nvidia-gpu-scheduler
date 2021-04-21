@@ -45,7 +45,7 @@ except ImportError as e:
 
 class OpenAIBaselinesExampleWorker(NVGPUWorker):
     @staticmethod
-    def worker_function(*args, config_path=None, config=None, **kwargs):
+    def worker_function(*args, config_path=None, config=None, config_byte=None, **kwargs):
         from baselines.common.cmd_util import common_arg_parser
         from nvidia_gpu_scheduler.utils import log_tqdm
         import os

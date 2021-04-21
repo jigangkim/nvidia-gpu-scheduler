@@ -97,8 +97,8 @@ class NVGPUScheduler(SyncManager):
         assert len(list_of_configs) > 0, 'No configs available!'
         print('Found %d configs'%(len(list_of_configs)))
         for path in list_of_configs:
-            with open(path, 'r') as f:
-                shared_pending_job_q.put({'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
+            with open(path, 'rb') as f:
+                shared_pending_job_q.put({'tag': path, 'config_byte': f.read(), 
                     'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
                 )
 
@@ -185,8 +185,8 @@ class NVGPUScheduler(SyncManager):
                     unresponsive_running = status['running']
                     for path in unresponsive_running:
                         # set unresponsive running jobs back to pending jobs
-                        with open(path, 'r') as f:
-                            shared_pending_job_q.put({'tag': path, 'config': json.load(f, object_hook=lambda d : SimpleNamespace(**d)), 
+                        with open(path, 'rb') as f:
+                            shared_pending_job_q.put({'tag': path, 'config_byte': f.read(), 
                                 'worker_args': worker_args, 'worker_kwargs': worker_kwargs}
                             )
             for name in unresponsive_workers:
