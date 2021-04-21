@@ -179,7 +179,7 @@ class NVGPUScheduler(SyncManager):
             # 3. exception handling for unresponsive worker(s)
             unresponsive_workers = []
             for name, status in worker_status.items():
-                if time.time() - status['last_updated'] > 60:
+                if time.time() - status['last_updated'] > 600:
                     print('worker %s has been unresponsive for 10 min!'%(name))
                     unresponsive_workers.append(name)
                     unresponsive_running = status['running']
@@ -191,6 +191,7 @@ class NVGPUScheduler(SyncManager):
                             )
             for name in unresponsive_workers:
                 worker_status.pop(name)
+            num_pending = shared_pending_job_q.qsize()
 
             # 4. SIGINT(ctrl-c) handler
             if self.scheduler_terminate:
