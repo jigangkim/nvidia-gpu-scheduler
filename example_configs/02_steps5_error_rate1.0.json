@@ -1,0 +1,13 @@
+{
+    "metadata": {
+        "sample_int": 1,
+        "sample_float": 0.0,
+        "sample_string": "sample",
+        "sample_list": [
+            {"sample_int": 1, "sample_float": 0.0, "sample_string": "sample"},
+            {"sample_int": 1, "sample_float": 0.0, "sample_string": "sample"}
+        ]
+    },
+    "steps": 5,
+    "error_rate": 1.0
+}

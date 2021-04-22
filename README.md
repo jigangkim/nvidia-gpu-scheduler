@@ -18,15 +18,26 @@ pip install . # standard installation
 pip install -e . # editable (develop mode) installation
 ```
 
-Usage (dummy example)
+Usage (dummy example: json)
 ```bash
 cd /path/to/install/nvidia-gpu-scheduler
 # Run job server
-python example.py --identity scheduler
+python example.py --identity scheduler --config_ext .json
 ```
 ```bash
 # Run worker
-python example.py --identity worker
+python example.py --identity worker --config_ext .json
+```
+
+Usage (dummy example: gin)
+```bash
+cd /path/to/install/nvidia-gpu-scheduler
+# Run job server
+python example.py --identity scheduler --config_ext .gin
+```
+```bash
+# Run worker
+python example.py --identity worker --config_ext .gin
 ```
 
 Usage (OpenAI baselines example)

@@ -23,6 +23,7 @@ setuptools.setup(
         'numpy',
         'py3nvml',
         'python-dateutil',
-        'tqdm'
+        'tqdm',
+        'gin-config'
     ],
 )
