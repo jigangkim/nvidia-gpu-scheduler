@@ -16,12 +16,12 @@ from nvidia_gpu_scheduler.utils import CatchExceptions
 #     n = 10
 #     pbar = tqdm(total=n)
 #     config_filename = os.path.basename(args.config_dir)
-#     log_tqdm(pbar, config_filename)
+#     log_tqdm(pbar, args.config_dir.replace('/','_'))
 #     for i in range(n):
 #         time.sleep(1)
 #         pbar.update(n=1)
-#         log_tqdm(pbar, config_filename)
-#     log_tqdm(pbar, config_filename, remove=True)
+#         log_tqdm(pbar, args.config_dir.replace('/','_'))
+#     log_tqdm(pbar, args.config_dir.replace('/','_'), remove=True)
 #     pbar.close()
 #     # intentionally trigger with 50% probability
 #     trigger_error = random.choice([True, False])
@@ -55,6 +55,7 @@ from nvidia_gpu_scheduler.utils import CatchExceptions
 
 class ExampleWorkerJSON(NVGPUWorker):
     @staticmethod
+    @CatchExceptions
     def worker_function(*args, config_path=None, config=None, **kwargs):
         import os
         import random
@@ -64,13 +65,12 @@ class ExampleWorkerJSON(NVGPUWorker):
 
         n = config.steps
         pbar = tqdm(total=n)
-        config_filename = os.path.basename(os.path.basename(config_path))
-        log_tqdm(pbar, config_filename)
+        log_tqdm(pbar, config_path.replace('/','_'))
         for i in range(n):
             time.sleep(1)
             pbar.update(n=1)
-            log_tqdm(pbar, config_filename)
-        log_tqdm(pbar, config_filename, remove=True)
+            log_tqdm(pbar, config_path.replace('/','_'))
+        log_tqdm(pbar, config_path.replace('/','_'), remove=True)
         pbar.close()
         # intentionally trigger with 50% probability
         trigger_error = random.random() < config.error_rate
@@ -82,6 +82,7 @@ class ExampleWorkerJSON(NVGPUWorker):
 
 class ExampleWorkerGIN(NVGPUWorker):
     @staticmethod
+    @CatchExceptions
     def worker_function(*args, config_path=None, config_byte=None, **kwargs):
         import os
         import random
@@ -92,13 +93,12 @@ class ExampleWorkerGIN(NVGPUWorker):
         @gin.configurable
         def run(steps=0, error_rate=0):
             pbar = tqdm(total=steps)
-            config_filename = os.path.basename(os.path.basename(config_path))
-            log_tqdm(pbar, config_filename)
+            log_tqdm(pbar, config_path.replace('/','_'))
             for i in range(steps):
                 time.sleep(1)
                 pbar.update(n=1)
-                log_tqdm(pbar, config_filename)
-            log_tqdm(pbar, config_filename, remove=True)
+                log_tqdm(pbar, config_path.replace('/','_'))
+            log_tqdm(pbar, config_path.replace('/','_'), remove=True)
             pbar.close()
             # intentionally trigger error
             trigger_error = random.random() < error_rate

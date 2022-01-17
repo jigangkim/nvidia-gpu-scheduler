@@ -242,7 +242,7 @@ class NVGPUWorker(SyncManager, ABC):
             for key in running:
                 name_str = os.path.basename(key)
                 try:
-                    tqdm_stat = pickle.load(open(os.path.join('/tmp', name_str + '.tqdm'), 'rb'))
+                    tqdm_stat = pickle.load(open(os.path.join('/tmp', key.replace('/','_') + '.tqdm'), 'rb'))
                     tqdm_stats.append(tqdm_stat)
                     tqdm_str = 'gpu%s pid=%d |%d%%| %d/%d [%s<%s, %sit/s]' % tqdm_stat
                 except:

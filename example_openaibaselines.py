@@ -28,11 +28,11 @@ except ImportError as e:
 #     parsed_args, parsed_unknown_args = arg_parser.parse_known_args(args)
 #     pbar = tqdm(total=parsed_args.num_timesteps)
 #     config_filename = os.path.basename(config_dir)
-#     log_tqdm(pbar, config_filename)
+#     log_tqdm(pbar, config_dir.replace('/','_'))
 #     # Execute OpenAI baselines.run module
 #     run_baseline(args)
 #     # Close tqdm and remove tqdm logs
-#     log_tqdm(pbar, config_filename, remove=True)
+#     log_tqdm(pbar, config_dir.replace('/','_'), remove=True)
 #     pbar.close()
 
 
@@ -45,6 +45,7 @@ except ImportError as e:
 
 class OpenAIBaselinesExampleWorker(NVGPUWorker):
     @staticmethod
+    @CatchExceptions
     def worker_function(*args, config_path=None, config=None, config_byte=None, **kwargs):
         from baselines.common.cmd_util import common_arg_parser
         from nvidia_gpu_scheduler.utils import log_tqdm
@@ -55,13 +56,12 @@ class OpenAIBaselinesExampleWorker(NVGPUWorker):
         arg_parser = common_arg_parser()
         parsed_args, parsed_unknown_args = arg_parser.parse_known_args(*args)
         pbar = tqdm(total=parsed_args.num_timesteps)
-        config_filename = os.path.basename(os.path.basename(config_path))
-        log_tqdm(pbar, config_filename, remove=True)
+        log_tqdm(pbar, config_path.replace('/','_'), remove=False)
         os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-        # Execute OpenAI baselines.run module
+        # Execute OpenAI baselines.run module (pbar not updated)
         run_baseline(args)
         # Close tqdm and remove tqdm logs
-        log_tqdm(pbar, config_filename, remove=True)
+        log_tqdm(pbar, config_path.replace('/','_'), remove=True)
         pbar.close()
 
 

@@ -29,6 +29,7 @@ class CatchExceptions(object):
             result = self.__callable(*args, **kwargs)
         except Exception as e:
             print(traceback.format_exc())
+            logging.getLogger().critical('Uncaught error', exc_info=sys.exc_info())
             raise
         return result
 
