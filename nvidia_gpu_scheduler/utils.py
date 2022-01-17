@@ -269,8 +269,8 @@ def get_gpumem_utilization(allocated_gpus=[], username='all users', version='v1'
 
 if __name__ == "__main__":
     stime = time.time()
-    print(get_num_procs(version='v2', username='jgkim-larr'))
+    print(get_num_procs(version='v2', username='all users'))
     print(get_gpu_utilization())
-    print(get_gpumem_utilization(version='v2', username='jgkim-larr'))
+    print(get_gpumem_utilization(version='v2', username='all users'))
     ftime = time.time()
     print(ftime - stime, 'seconds')

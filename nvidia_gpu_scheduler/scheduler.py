@@ -223,7 +223,7 @@ if __name__ == '__main__':
 
     scheduler = NVGPUScheduler(55555, 'hello')
     scheduler.start()
-    scheduler.run(path_to_configs='/home/jgkim-larr/my_python_packages/nvidia-gpu-scheduler/example_configs',
+    scheduler.run(path_to_configs='./example_configs',
         config_extension='.json'
     )
     
