@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="nvidia_gpu_scheduler",
-    version="0.0.1",
+    version="1.1.1",
     author="Jigang Kim",
     author_email="jgkim2020@snu.ac.kr",
     description="NVIDIA GPU compute task scheduling utility",
