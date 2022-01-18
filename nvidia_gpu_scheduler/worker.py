@@ -154,7 +154,7 @@ class NVGPUWorker(SyncManager, ABC):
                     os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
                     grab_device_success = True
                 else:
-                    grab_device_success = py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=(100 - self.limits.max_gpu_mem_usage)/100, max_procs=-1) > 0
+                    grab_device_success = py3nvml.grab_gpus(num_gpus=1, gpu_select=[cand_gpu[min_util_idx]], gpu_fraction=(100 - self.limits.max_gpu_mem_usage)/100, max_procs=-1, env_set_ok=True) > 0
                 if not grab_device_success:
                     # if for some reason cannot allocate gpu
                     # print('CUDA_VISIBLE_DEVICES = %s'%(os.environ.get('CUDA_VISIBLE_DEVICES')))
