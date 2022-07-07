@@ -167,9 +167,12 @@ def get_num_procs(allocated_gpus=[], username='all users', version='v1'):
         procs_user = []
         procs_pid = []
         for proc in procs:
-            proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
-            if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
-                procs_user.append(proc)
+            try:
+                proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
+                if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
+                    procs_user.append(proc)
+            except:
+                pass
             procs_pid.append(proc.pid)
         gpu_procs_user[i] = len(procs_user)
         gpu_procs_pid[i] = procs_pid
@@ -252,9 +255,12 @@ def get_gpumem_utilization(allocated_gpus=[], username='all users', version='v1'
         mem_user = []
         mem_pid = {}
         for proc in procs:
-            proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
-            if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
-                mem_user.append(proc.usedGpuMemory)
+            try:
+                proc_uid = os.stat('/proc/%d' % (proc.pid)).st_uid
+                if pwd.getpwuid(proc_uid).pw_name == username or username == 'all users':
+                    mem_user.append(proc.usedGpuMemory)
+            except:
+                pass
             mem_pid[proc.pid] = int(np.ceil(100*proc.usedGpuMemory/info.total))
         mem_rates_user[i] = int(np.ceil(100*sum(mem_user)/info.total))
         mem_rates_pid[i] = mem_pid
