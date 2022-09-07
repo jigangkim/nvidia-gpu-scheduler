@@ -56,7 +56,7 @@ class NVGPUWorker(SyncManager, ABC):
         max_gpu_mem_usage=50,
         time_between_jobs=0,
         subprocess_verbose=False,
-        apply_limits=['user', 'worker'][0]
+        apply_limits=['user', 'worker', 'all'][0]
         ):
         self.limits = SimpleNamespace()
         self.limits.available_gpus = available_gpus
@@ -130,11 +130,14 @@ class NVGPUWorker(SyncManager, ABC):
                 user_util_cond = user_gpu_utilization_filt[i] < floor(max_utilization[i]*(100-self.limits.utilization_margin)/100)
                 user_numproc_cond = user_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
                 worker_numproc_cond = worker_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
+                tot_numproc_cond = total_compute_procs[i] < max_jobs_per_gpu[i] or max_jobs_per_gpu[i] == -1
                 
                 if self.limits.apply_limits == 'user':
                     is_cand = tot_util_cond and user_util_cond and user_numproc_cond and tot_memutil_cond 
                 elif self.limits.apply_limits == 'worker':
                     is_cand = tot_util_cond and worker_numproc_cond and tot_memutil_cond
+                elif self.limits.apply_limits == 'all':
+                    is_cand = tot_util_cond and tot_numproc_cond and tot_memutil_cond
                 else:
                     is_cand = False
                     print("Invalid apply_limits. Available options are ['user', 'worker']")
@@ -218,6 +221,8 @@ class NVGPUWorker(SyncManager, ABC):
                 print('+ WORKER: %s (apply limits on user %s)'%(self.name, curr_user))
             elif self.limits.apply_limits == 'worker':
                 print('+ WORKER: %s (apply limits on current worker)'%(self.name))
+            elif self.limits.apply_limits == 'all':
+                print('+ WORKER: %s (apply limits on all processes)'%(self.name))
             else:
                 print("Invalid apply_limits. Available options are ['user', 'worker']")
             print(('+ (gpu_ids=%s, job_limit=%s, util_limit=%s%%)'%(list_of_gpus, max_jobs_per_gpu, max_utilization)).ljust(entry_len,' '))
